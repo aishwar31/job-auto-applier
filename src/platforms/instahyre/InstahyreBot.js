@@ -1,38 +1,37 @@
-const Platform = require('../Platform');
+const Platform = require('../../core/Platform');
 const { randomDelay, logger } = require('../../utils/helpers');
 const fs = require('fs');
 const path = require('path');
+const AppliedJob = require('../../models/AppliedJob');
 
 class InstahyreBot extends Platform {
   constructor(page, config) {
     super(page, config);
-    this.sessionFile = path.join(__dirname, '..', '..', '..', 'instahyre_session.json');
+
+    this.sessionFile = path.join(__dirname, '..', '..', '..', 'data', 'sessions', 'instahyre_session.json');
   }
 
   async login() {
     logger.info("Starting Instahyre login process...");
 
-    // Try to load existing session
     if (fs.existsSync(this.sessionFile)) {
       const cookies = JSON.parse(fs.readFileSync(this.sessionFile, 'utf8'));
       await this.page.context().addCookies(cookies);
       logger.info("Loaded previous session cookies.");
       await this.page.goto('https://www.instahyre.com/candidate/opportunities');
-      
-      // Check if actually logged in by looking for an element unique to logged-in users
-      // For Instahyre, the profile dropdown or logout button usually works. Wait briefly.
+
+
       try {
         await this.page.waitForSelector('.profile-dropdown', { timeout: 5000 });
         logger.success("Successfully logged in using saved session.");
         return;
       } catch (e) {
         logger.warn("Session expired or invalid. Proceeding with manual login.");
-        // Clear cookies to be safe
+
         await this.page.context().clearCookies();
       }
     }
 
-    // Manual Login
     await this.page.goto('https://www.instahyre.com/login/');
     
     logger.info("Filling login form...");
@@ -47,16 +46,14 @@ class InstahyreBot extends Platform {
     await randomDelay(1000, 2000);
     
     await this.page.click('button[type="submit"]');
-    
-    // Wait for successful login indicator (e.g. navigation to opportunities or a profile dropdown)
+
     try {
-      // Instahyre uses AJAX for login, so instead of waitForNavigation, we wait for the URL to change 
-      // or for a logged-in element to appear.
+
+
       await this.page.waitForURL('**/candidate/**', { timeout: 15000 }).catch(() => null);
       await this.page.waitForSelector('.candidate-opportunities, .employer-row', { timeout: 15000 });
       logger.success("Login successful via form submission.");
-      
-      // Save session
+
       const cookies = await this.page.context().cookies();
       fs.writeFileSync(this.sessionFile, JSON.stringify(cookies));
       logger.info("Session saved for future use.");
@@ -66,51 +63,53 @@ class InstahyreBot extends Platform {
   }
 
   async searchJobs() {
-    logger.info(`Searching for jobs on Instahyre matching: Role '${this.config.jobRole}', Location '${this.config.location}'`);
-    
-    // Instahyre's URL structure for search
-    // We can navigate directly or use the UI search bar
-    await this.page.goto('https://www.instahyre.com/candidate/opportunities');
-    await randomDelay(2000, 4000);
 
-    // Filter by role and location (simulating UI interaction)
-    // Instahyre uses angular, so we need to be careful with inputs
-    try {
-      // Note: Instahyre's domestic search specific logic.
-      // Easiest way in Instahyre is to just apply to the "Recommended" jobs which default load.
-      // But let's try to add the location and role if the input exists.
-      const searchRoleSel = 'input[placeholder*="Skills, designation"]';
-      const searchLocSel = 'input[placeholder*="Location"]';
-      
-      if (await this.page.$(searchRoleSel)) {
-         await this.page.fill(searchRoleSel, this.config.jobRole);
-         await randomDelay(1000, 2000);
-      }
-      
-      if (await this.page.$(searchLocSel)) {
-         await this.page.fill(searchLocSel, this.config.location);
-         await randomDelay(1000, 2000);
-      }
-      
-      // Click update/search button if exists (often it auto-updates)
-      const btnSel = 'button:has-text("Update")';
-      if (await this.page.$(btnSel)) {
-          await this.page.click(btnSel);
-          await randomDelay(3000, 5000);
-      }
+    const roles = this.config.jobRole.split(',').map(r => r.trim()).filter(Boolean);
+    const locations = this.config.location.split(',').map(l => l.trim()).filter(Boolean);
 
-      await this.applyToJobsOnPage();
-    } catch (error) {
-       logger.error(`Error during search: ${error.message}`);
+    if (roles.length === 0) roles.push('Software Engineer');
+    if (locations.length === 0) locations.push('Bangalore');
+
+    for (const role of roles) {
+        for (const location of locations) {
+            logger.info(`\n=== Searching for jobs: Role '${role}', Location '${location}' ===\n`);
+
+            await this.page.goto('https://www.instahyre.com/candidate/opportunities');
+            await randomDelay(2000, 4000);
+
+            try {
+              const searchRoleSel = 'input[placeholder*="Skills, designation"]';
+              const searchLocSel = 'input[placeholder*="Location"]';
+              
+              if (await this.page.$(searchRoleSel)) {
+                 await this.page.fill(searchRoleSel, role);
+                 await randomDelay(1000, 2000);
+              }
+              
+              if (await this.page.$(searchLocSel)) {
+                 await this.page.fill(searchLocSel, location);
+                 await randomDelay(1000, 2000);
+              }
+              
+              const btnSel = 'button:has-text("Update")';
+              if (await this.page.$(btnSel)) {
+                  await this.page.click(btnSel);
+                  await randomDelay(4000, 6000); // Give it time to load the results
+              }
+
+              await this.applyToJobsOnPage(); // Processes standard pages for this combination
+            } catch (error) {
+               logger.error(`Error during search for ${role} in ${location}: ${error.message}`);
+            }
+        }
     }
   }
 
   async applyToJobsOnPage() {
     logger.info("Scanning for jobs on current page...");
 
-    // Find all 'Apply' or 'Show Interest' buttons
-    // The exact selector depends on Instahyre's current DOM
-    // Typically it's a button with class like 'button-download' or angular classes
+
+
     
     let hasNextPage = true;
     let pagesProcessed = 0;
@@ -121,30 +120,59 @@ class InstahyreBot extends Platform {
        logger.info(`Processing page ${pagesProcessed}...`);
        
        await this.page.waitForSelector('.employer-row', { timeout: 10000 }).catch(() => null);
-       
-       // Get all buttons that say "View" or "Apply"
-       // Usually on the list page, Instahyre has "View" which expands the details, then "Apply"
+
+
        const jobCardsLocator = this.page.locator('.employer-row');
        const count = await jobCardsLocator.count();
        logger.info(`Found ${count} job cards on this page.`);
 
        for (let i = 0; i < count; i++) {
          const card = jobCardsLocator.nth(i);
-         
-         // Scroll to card
+
          await card.scrollIntoViewIfNeeded();
          await randomDelay(1000, 2000);
 
-         // Check if already applied
          const appliedBadgeCount = await card.locator('.applied-badge').count(); // Example selector
          if (appliedBadgeCount > 0) {
              logger.info("Already applied to this job, skipping.");
              continue;
          }
 
-         // Click card to open modal/details
+         const titleTextNode = card.locator('.employer-job-name').first();
+         let titleText = "Unknown Job";
+         if (await titleTextNode.count() > 0) {
+             titleText = await titleTextNode.innerText();
+         }
+         const titleLower = titleText.toLowerCase();
+
+         const excludeKeywords = ['java ', 'java-', ' java', '.net', 'c#', 'php', 'ruby', 'golang', 'python', 'ios', 'android', 'test', 'qa', 'devops', 'data', 'ml', 'ai', 'manager', 'sales'];
+         const isExcluded = excludeKeywords.some(keyword => titleLower.includes(keyword) || titleLower === 'java');
+         
+         if (isExcluded) {
+             logger.info(`Skipping '${titleText.replace(/\n/g, ' ')}' - Excluded keyword in title.`);
+             continue;
+         }
+
+         const targetRoles = ['full stack', 'fullstack', 'mern', 'mean', 'node', 'react', 'angular', 'next', 'backend', 'front end', 'frontend', 'software engineer', 'sde', 'developer'];
+         const isTargetRole = targetRoles.some(role => titleLower.includes(role));
+
+         const skillsList = await card.locator('.job-skills .tags li').allInnerTexts().catch(() => []);
+         const skillsLower = skillsList.map(s => s.toLowerCase());
+         
+         const coreTechnologies = ['node', 'react', 'angular', 'next', 'mern', 'mean', 'express', 'javascript', 'typescript'];
+         
+         const hasCoreTech = skillsLower.some(skill => coreTechnologies.some(t => skill.includes(t)));
+
+
+         if (!isTargetRole || !hasCoreTech) {
+             logger.info(`Skipping '${titleText.replace(/\n/g, ' ')}' - Doesn't match target tech stack.`);
+             continue;
+         }
+         
+         logger.info(`Match found: '${titleText.replace(/\n/g, ' ')}'`);
+
          try {
-             // The button is usually .button-interested or #interested-btn
+
              const viewBtn = card.locator('.button-interested, #interested-btn');
              if (await viewBtn.count() > 0) {
                  await viewBtn.click();
@@ -153,18 +181,44 @@ class InstahyreBot extends Platform {
              }
              await randomDelay(2000, 3000);
 
-             // Look for Apply button in the modal
              const applyBtn = this.page.locator('button.btn-lg.btn-primary:has-text("Apply")').first();
              try {
                  await applyBtn.waitFor({ state: 'visible', timeout: 5000 });
                  logger.info("Found apply button. Clicking...");
                  await applyBtn.click(); 
-                 logger.success("Simulated clicking apply.");
+                 
+                 // Instahyre's .employer-job-name often formats as "Company - Job Role"
+                 let companyName = "Unknown Company";
+                 let finalJobTitle = titleText.replace(/\n/g, ' ');
+                 
+                 if (finalJobTitle.includes(' - ')) {
+                     const parts = finalJobTitle.split(' - ');
+                     companyName = parts[0].trim();
+                     finalJobTitle = parts.slice(1).join(' - ').trim();
+                 }
+
+                 try {
+                     const newJob = new AppliedJob({
+                         jobTitle: finalJobTitle,
+                         companyName: companyName,
+                         platform: 'instahyre',
+                     });
+                     await newJob.save();
+                     logger.success(`Saved application for ${titleText.replace(/\n/g, ' ')} at ${companyName} to Database!`);
+                 } catch (dbErr) {
+                     // Usually a duplicate key error if we already applied
+                     if (dbErr.code === 11000) {
+                        logger.info(`Job at ${companyName} already exists in Database.`);
+                     } else {
+                        logger.error(`Database Error: ${dbErr.message}`);
+                     }
+                 }
+                 
                  await randomDelay(2000, 3000);
              } catch (e) {
                  logger.warn("Apply button not found for this job.");
              } finally {
-                 // Close the modal by clicking the backdrop or 'x' button
+
                  await this.page.evaluate(() => {
                      const closeBackdrop = document.querySelector('.application-modal-backdrop, .modal-backdrop');
                      if (closeBackdrop) closeBackdrop.click();
@@ -173,13 +227,32 @@ class InstahyreBot extends Platform {
                      if (closeBtn) closeBtn.click();
                  });
                  await randomDelay(1500, 2000);
+
+                 try {
+                     const similarJobsModal = this.page.locator('.modal-dialog-similar-jobs, .similar-jobs-modal'); // Guessing class names for now
+                     if (await similarJobsModal.count() > 0) {
+                         logger.info("Found similar jobs popup. Clicking Done/Close...");
+                         const closeSimilarBtn = similarJobsModal.locator('button.close, .btn-primary:has-text("Done"), button:has-text("No")').first();
+                         if (await closeSimilarBtn.count() > 0) {
+                             await closeSimilarBtn.click();
+                         } else {
+
+                             await this.page.evaluate(() => {
+                                 const backdrops = document.querySelectorAll('.modal-backdrop');
+                                 if (backdrops.length > 0) backdrops[backdrops.length - 1].click();
+                             });
+                         }
+                         await randomDelay(1000, 1500);
+                     }
+                 } catch (e) {
+                     logger.debug("No similar jobs popup found or error handling it.");
+                 }
              }
          } catch(e) {
              logger.warn(`Could not interact with job card ${i}: ${e.message}`);
          }
        }
 
-       // Go to next page
        const nextBtn = await this.page.$('li.pagination-next a');
        if (nextBtn) {
            logger.info("Going to next page.");
@@ -193,7 +266,7 @@ class InstahyreBot extends Platform {
   }
 
   async applyToJob() {
-    // This is useful if we have a direct url to a job
+
     throw new Error("applyToJob(url) not fully implemented for Instahyre yet as it primarily uses single page app modals.");
   }
 }

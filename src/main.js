@@ -1,10 +1,13 @@
 require('dotenv').config();
 const { chromium } = require('playwright');
-const platforms = require('./src/platforms');
-const { logger } = require('./src/utils/helpers');
+const platforms = require('./platforms');
+const { logger } = require('./utils/helpers');
+
+const connectDB = require('./config/db');
 
 async function main() {
-  // Get platform from args, default to instahyre
+  await connectDB();
+
   const platformName = process.argv[2] && process.argv[2].toLowerCase() || 'instahyre';
 
   logger.info(`Initializing Bot for platform: ${platformName}...`);
@@ -15,11 +18,11 @@ async function main() {
     process.exit(1);
   }
 
-  // Launch browser
+
   const headless = process.env.HEADLESS_MODE === 'true';
   const browser = await chromium.launch({ headless });
   
-  // Create a new browser context (allows setting user agents or permissions if needed)
+
   const context = await browser.newContext({
     viewport: { width: 1280, height: 720 },
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -27,7 +30,7 @@ async function main() {
   
   const page = await context.newPage();
 
-  // Configuration from .env dynamically based on platform
+
   const emailEnvVar = `${platformName.toUpperCase()}_EMAIL`;
   const passwordEnvVar = `${platformName.toUpperCase()}_PASSWORD`;
 
@@ -44,7 +47,7 @@ async function main() {
     process.exit(1);
   }
 
-  // Initialize and run the Bot
+
   const bot = new BotClass(page, config);
   
   try {
@@ -55,7 +58,7 @@ async function main() {
     logger.error(`${platformName} Bot encountered an error: ${error.message}`);
     console.error(error);
   } finally {
-    // Keep browser open for a few seconds if not headless so we can see the result
+
     if (!headless) {
       await new Promise(r => setTimeout(r, 5000));
     }
