@@ -1,8 +1,7 @@
 const InstahyreBot = require('./instahyre/InstahyreBot');
+const NaukriBot = require('./naukri/NaukriBot');
 
 module.exports = {
   instahyre: InstahyreBot,
-  // Add more platforms here as they are implemented
-  // linkedin: LinkedinBot,
-  // naukri: NaukriBot,
+  naukri: NaukriBot,
 };
